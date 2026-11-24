@@ -1,0 +1,13 @@
+# Each team's lead reviews changes in that team's folders.
+# Replace @willowmere-waste/* with your GitHub teams.
+*                                         @willowmere-waste/sf-release-managers
+/force-app/main/default/objects/Account/  @willowmere-waste/sf-shared-objects
+/force-app/main/default/objects/Case/     @willowmere-waste/sf-shared-objects
+/force-app/main/default/profiles/         @willowmere-waste/sf-shared-objects
+/force-app/main/default/namedCredentials/ @willowmere-waste/sf-integrations
+/force-app/main/default/classes/Hauling*  @willowmere-waste/team-hauling
+/force-app/main/default/classes/Billing*  @willowmere-waste/team-billing
+/tests/manifests/team-hauling.txt         @willowmere-waste/team-hauling
+/tests/manifests/team-billing.txt         @willowmere-waste/team-billing
+/.github/                                 @willowmere-waste/sf-release-managers
+/scripts/                                 @willowmere-waste/sf-release-managers

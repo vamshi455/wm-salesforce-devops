@@ -1,0 +1,30 @@
+name: Deploy to Integration
+on:
+  push:
+    branches: [develop]
+concurrency: { group: integration, cancel-in-progress: false }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: integration
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: integration
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: ${{ vars.SF_INSTANCE_URL }}
+      - run: sf sgd source delta --from "${{ github.event.before }}" --to HEAD --output-dir delta --generate-delta
+      - run: ./scripts/replace-tokens.sh delta/force-app
+        env:
+          ERP_ENDPOINT: ${{ vars.ERP_ENDPOINT }}
+          ROUTING_API_ENDPOINT: ${{ vars.ROUTING_API_ENDPOINT }}
+      - name: Deploy delta
+        run: |
+          [ -z "$(ls -A delta/force-app 2>/dev/null)" ] && { echo "No metadata changes"; exit 0; }
+          sf project deploy start --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --test-level NoTestRun --target-org integration --wait 90

@@ -1,0 +1,26 @@
+name: Production drift check
+# Weekly: retrieve Production and diff against main to catch manual changes (risk #5).
+on:
+  schedule: [{ cron: '0 12 * * 1' }]
+  workflow_dispatch:
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    environment: production-validate
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: prod
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: https://login.salesforce.com
+      - run: sf project generate manifest --source-dir force-app --name drift-package --output-dir .
+      - run: sf project retrieve start --manifest drift-package.xml --target-org prod --ignore-conflicts
+      - name: Report drift
+        run: |
+          if git diff --quiet; then echo "No drift" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          git diff --stat | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Production differs from main. Open a PR to bring the change into main and develop."

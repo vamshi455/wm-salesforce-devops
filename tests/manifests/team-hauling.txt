@@ -1,0 +1,4 @@
+# component-glob  test-class  (one per line; the pipeline runs the tests whose glob matches a changed file)
+classes/Hauling*            HaulingServiceTest
+classes/RouteOptimizer*     RouteOptimizerTest
+flows/Hauling_*             HaulingFlowTest

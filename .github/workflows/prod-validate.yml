@@ -1,0 +1,42 @@
+name: Production validate (check only)
+# Run by the release manager about a week before the release window, after UAT sign-off.
+on:
+  workflow_dispatch:
+    inputs:
+      branch: { description: 'release/YYYY-MM or hotfix/<ticket>', required: true }
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    environment: production-validate
+    outputs:
+      job_id: ${{ steps.val.outputs.job_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: prod
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: https://login.salesforce.com
+      - run: sf sgd source delta --from origin/main --to HEAD --output-dir delta --generate-delta
+      - run: ./scripts/replace-tokens.sh delta/force-app
+        env:
+          ERP_ENDPOINT: ${{ vars.ERP_ENDPOINT }}
+          ROUTING_API_ENDPOINT: ${{ vars.ROUTING_API_ENDPOINT }}
+      - id: tests
+        run: echo "list=$(./scripts/select-tests.sh delta)" >> "$GITHUB_OUTPUT"
+      - name: Validate against Production
+        id: val
+        run: |
+          TESTS="${{ steps.tests.outputs.list }}"
+          [ -z "$TESTS" ] && { echo "::error::Production deploys need specified tests"; exit 1; }
+          sf project deploy validate --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --test-level RunSpecifiedTests $(printf -- '--tests %s ' $TESTS) \
+            --target-org prod --wait 180 --json | tee validate.json
+          echo "job_id=$(python3 -c 'import json;print(json.load(open("validate.json"))["result"]["id"])')" >> "$GITHUB_OUTPUT"
+      - run: echo "Validation ID ${{ steps.val.outputs.job_id }} (valid for 10 days). Pass it to the Production release workflow." >> "$GITHUB_STEP_SUMMARY"

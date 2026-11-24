@@ -1,0 +1,45 @@
+name: PR validate
+on:
+  pull_request:
+    branches: [develop, 'release/**', main]
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    # Validate feature PRs against Integration; release/hotfix PRs against QA.
+    environment: ${{ github.base_ref == 'develop' && 'integration' || 'qa' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: target
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: ${{ vars.SF_INSTANCE_URL }}
+      - name: Build delta package
+        run: |
+          mkdir -p delta
+          sf sgd source delta --from "origin/${{ github.base_ref }}" --to HEAD --output-dir delta --generate-delta
+      - name: Replace environment tokens
+        run: ./scripts/replace-tokens.sh delta/force-app
+        env:
+          ERP_ENDPOINT: ${{ vars.ERP_ENDPOINT }}
+          ROUTING_API_ENDPOINT: ${{ vars.ROUTING_API_ENDPOINT }}
+      - name: Static analysis
+        run: sf code-analyzer run --workspace delta --severity-threshold 2 --view table
+      - name: Choose tests
+        id: tests
+        run: echo "list=$(./scripts/select-tests.sh delta)" >> "$GITHUB_OUTPUT"
+      - name: Validate-only deploy
+        run: |
+          if [ -z "$(ls -A delta/force-app 2>/dev/null)" ]; then echo "No metadata changes"; exit 0; fi
+          TESTS="${{ steps.tests.outputs.list }}"
+          LEVEL=$([ -n "$TESTS" ] && echo RunSpecifiedTests || echo NoTestRun)
+          sf project deploy validate --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --test-level "$LEVEL" ${TESTS:+$(printf -- '--tests %s ' $TESTS)} \
+            --target-org target --wait 90

@@ -1,0 +1,48 @@
+name: Release to QA
+# Runs when a release or hotfix branch is created or updated.
+on:
+  push:
+    branches: ['release/**', 'hotfix/**']
+concurrency: { group: qa, cancel-in-progress: false }
+jobs:
+  deploy-qa:
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: qa
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: ${{ vars.SF_INSTANCE_URL }}
+      - name: Release name
+        id: rel
+        run: echo "name=${GITHUB_REF_NAME#*/}" >> "$GITHUB_OUTPUT"
+      - name: Delta against production (main)
+        run: sf sgd source delta --from origin/main --to HEAD --output-dir delta --generate-delta
+      - run: ./scripts/replace-tokens.sh delta/force-app
+        env:
+          ERP_ENDPOINT: ${{ vars.ERP_ENDPOINT }}
+          ROUTING_API_ENDPOINT: ${{ vars.ROUTING_API_ENDPOINT }}
+      - name: Pre-deploy steps
+        run: ./scripts/run-release-steps.sh "${{ steps.rel.outputs.name }}" pre qa
+      - id: tests
+        run: echo "list=$(./scripts/select-tests.sh delta)" >> "$GITHUB_OUTPUT"
+      - name: Deploy to QA
+        run: |
+          [ -z "$(ls -A delta/force-app 2>/dev/null)" ] && { echo "No metadata changes"; exit 0; }
+          TESTS="${{ steps.tests.outputs.list }}"
+          LEVEL=$([ -n "$TESTS" ] && echo RunSpecifiedTests || echo NoTestRun)
+          sf project deploy start --manifest delta/package/package.xml \
+            --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+            --test-level "$LEVEL" ${TESTS:+$(printf -- '--tests %s ' $TESTS)} --target-org qa --wait 120
+      - name: QA config (custom metadata per environment)
+        run: '[ -n "$(ls -A config/qa | grep -v .gitkeep)" ] && sf project deploy start --source-dir config/qa --target-org qa --wait 30 || echo "No QA config"'
+      - name: Post-deploy steps
+        run: ./scripts/run-release-steps.sh "${{ steps.rel.outputs.name }}" post qa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: qa-release-logs, path: release-logs/, if-no-files-found: ignore }

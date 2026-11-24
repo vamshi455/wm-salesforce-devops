@@ -1,0 +1,26 @@
+name: Salesforce setup
+description: Install the Salesforce CLI and plugins, then log in to the target org with the JWT bearer flow.
+inputs:
+  alias: { description: Org alias, required: true }
+  client-id: { description: Connected app consumer key, required: true }
+  username: { description: Integration user, required: true }
+  jwt-key: { description: Private key (PEM), required: true }
+  instance-url: { description: Login URL, required: false, default: https://test.salesforce.com }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with: { node-version: 20 }
+    - shell: bash
+      run: |
+        npm install -g @salesforce/cli@2
+        echo y | sf plugins install sfdx-git-delta
+        sf plugins install code-analyzer
+    - shell: bash
+      env:
+        JWT_KEY: ${{ inputs.jwt-key }}
+      run: |
+        printf '%s' "$JWT_KEY" > server.key
+        sf org login jwt --client-id "${{ inputs.client-id }}" --jwt-key-file server.key \
+          --username "${{ inputs.username }}" --instance-url "${{ inputs.instance-url }}" --alias "${{ inputs.alias }}"
+        rm server.key

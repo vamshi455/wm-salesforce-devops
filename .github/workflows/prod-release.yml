@@ -1,0 +1,62 @@
+name: Production release
+# Gates: ServiceNow CAB approval + GitHub "production" environment required reviewers (release manager).
+on:
+  workflow_dispatch:
+    inputs:
+      branch: { description: 'release/YYYY-MM or hotfix/<ticket>', required: true }
+      validation_id: { description: 'Job ID from "Production validate"', required: true }
+      change_number: { description: 'ServiceNow change request, e.g. CHG0123456', required: true }
+jobs:
+  cab-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for CAB approval in ServiceNow
+        run: ./scripts/servicenow-cab-check.sh "${{ inputs.change_number }}" 30
+        env:
+          SN_INSTANCE: ${{ vars.SN_INSTANCE }}
+          SN_USER: ${{ secrets.SN_USER }}
+          SN_PASSWORD: ${{ secrets.SN_PASSWORD }}
+  release:
+    needs: cab-gate
+    runs-on: ubuntu-latest
+    environment: production        # required reviewers = release managers
+    concurrency: { group: production, cancel-in-progress: false }
+    permissions: { contents: write, pull-requests: write }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+      - uses: ./.github/actions/sf-setup
+        with:
+          alias: prod
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          username: ${{ vars.SF_USERNAME }}
+          jwt-key: ${{ secrets.SF_JWT_KEY }}
+          instance-url: https://login.salesforce.com
+      - name: Release name
+        id: rel
+        run: echo "name=${{ inputs.branch }}" | sed 's#name=[^/]*/#name=#' >> "$GITHUB_OUTPUT"
+      - name: Pre-deploy steps
+        run: ./scripts/run-release-steps.sh "${{ steps.rel.outputs.name }}" pre prod
+      - name: Quick deploy validated package
+        run: sf project deploy quick --job-id "${{ inputs.validation_id }}" --target-org prod --wait 120
+      - name: Production config
+        run: '[ -n "$(ls -A config/prod | grep -v .gitkeep)" ] && sf project deploy start --source-dir config/prod --target-org prod --wait 30 || echo "No prod config"'
+      - name: Post-deploy steps
+        run: ./scripts/run-release-steps.sh "${{ steps.rel.outputs.name }}" post prod
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: prod-release-logs, path: release-logs/, if-no-files-found: ignore }
+      - name: Merge to main, tag, open back-merge PR to develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "release-bot"; git config user.email "release-bot@users.noreply.github.com"
+          git fetch origin main develop
+          git checkout main && git merge --no-ff "origin/${{ inputs.branch }}" -m "Release ${{ steps.rel.outputs.name }} (${{ inputs.change_number }})"
+          git tag -a "release-${{ steps.rel.outputs.name }}" -m "${{ inputs.change_number }}"
+          git push origin main --tags
+          gh pr create --base develop --head main --title "Back-merge ${{ steps.rel.outputs.name }} into develop" \
+            --body "Automatic back-merge after production release ${{ inputs.change_number }}." || true

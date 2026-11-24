@@ -1,0 +1,7 @@
+.sf/
+.sfdx/
+node_modules/
+delta/
+auth.txt
+*.log
+.DS_Store
